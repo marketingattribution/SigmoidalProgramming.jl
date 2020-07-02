@@ -3,7 +3,7 @@ using Base, GLPK, DataStructures, MathOptInterface, DataFrames
 import DataStructures: PriorityQueue, enqueue!, dequeue!
 import Base.Order.Reverse
 
-export solve_sp    
+export solve_sp, find_w
 
 
 ## utilities
