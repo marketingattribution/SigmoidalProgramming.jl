@@ -1,5 +1,5 @@
 using JuMP
-using Base, GLPK, DataStructures, MathOptInterface, DataFrames
+using Base, GLPK, Clp, DataStructures, MathOptInterface, DataFrames
 import DataStructures: PriorityQueue, enqueue!, dequeue!
 import Base.Order.Reverse
 
@@ -45,7 +45,7 @@ end
 
 ## maximize concave hull
 function maximize_fhat(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF));
+                       m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0));
                        maxiters = 10, TOL = 1e-6, verbose=0)
     nvar = length(l)
     maxiters *= nvar
@@ -110,19 +110,23 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
         end
     end
     # refine t a bit to make sure it's really on the convex hull
-    t = zeros(nvar)
-    x_val = value.(x)
-    for i=1:nvar
-        xi = x_val[i]
-        if xi >= w[i]
-            t[i] = fs[i](xi)
-        else
-            slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
-            offsetatl = fs[i](l[i])
-            t[i] = offsetatl + slopeatl*(xi - l[i])
+    if status == MathOptInterface.OPTIMAL
+        t = zeros(nvar)
+        x_val = value.(x)
+        for i=1:nvar
+            xi = x_val[i]
+            if xi >= w[i]
+                t[i] = fs[i](xi)
+            else
+                slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
+                offsetatl = fs[i](l[i])
+                t[i] = offsetatl + slopeatl*(xi - l[i])
+            end
         end
+        return x_val, t, status
+    else
+        return -Inf, -Inf, status
     end
-    return x_val, t, status
 end
 
 ## Nodes of the branch and bound tree
@@ -139,6 +143,7 @@ struct Node
         # find upper and lower bounds
         x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
         if status==MathOptInterface.TerminationStatusCode(1)
+            x[x .< 0] .=0
             s = Float64[problem.fs[i](x[i]) for i=1:nvar]
             ub = sum(t)
             lb = sum(s)

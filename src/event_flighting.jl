@@ -11,8 +11,8 @@ function event_flighting(
     coef::Float64,
     retention::Float64,
     spend::Float64;
-    verbose::Int=0,
     maxiters::Int64,
+    verbose::Int=0,
     TOL::Float64=0.01,
     nweeks::Int=52,
     nconstr::Int=1,
