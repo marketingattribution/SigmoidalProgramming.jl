@@ -43,6 +43,24 @@ function bisection(f, a, b, tol=1e-9, maxiters=1000)
     return (b-a)/2
 end
 
+## calculate convex hull
+function calculate_hull(x_val, w, l, fs)
+    nvar = size(w)[1]
+    t = zeros(nvar)
+    for i=1:nvar
+        xi = x_val[i]
+        if xi >= w[i]
+            t[i] = fs[i](xi)
+        else
+            slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
+            offsetatl = fs[i](l[i])
+            t[i] = offsetatl + slopeatl*(xi - l[i])
+        end
+    end
+    return t
+end
+
+
 ## maximize concave hull
 function maximize_fhat(l, u, w, problem::SigmoidalProgram,
                        m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0));
@@ -111,18 +129,8 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     end
     # refine t a bit to make sure it's really on the convex hull
     if status == MathOptInterface.OPTIMAL
-        t = zeros(nvar)
         x_val = value.(x)
-        for i=1:nvar
-            xi = x_val[i]
-            if xi >= w[i]
-                t[i] = fs[i](xi)
-            else
-                slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
-                offsetatl = fs[i](l[i])
-                t[i] = offsetatl + slopeatl*(xi - l[i])
-            end
-        end
+        t = calculate_hull(x_val, w, l, fs)
         return x_val, t, status
     else
         return -Inf, -Inf, status
@@ -138,31 +146,40 @@ struct Node
     lb::Float64
     ub::Float64
     maxdiff_index::Int64
-    function Node(l,u,w,problem; kwargs...)
+    function Node(l,u,w,problem,init_x; kwargs...)
         nvar = length(l)
         # find upper and lower bounds
-        x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
-        if status==MathOptInterface.TerminationStatusCode(1)
-            x[x .< 0] .=0
-            s = Float64[problem.fs[i](x[i]) for i=1:nvar]
-            ub = sum(t)
+        if init_x != Nothing
+            x = init_x
+            s = Float64[problem.fs[i](x[i]) for i=1:size(x)[1]]
             lb = sum(s)
+            t = calculate_hull(x, w, l, problem.fs)
+            ub = sum(t)
             maxdiff_index = argmax(t-s)
         else
-            ub = -Inf; lb = -Inf; maxdiff_index = 1
+            x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
+            if status==MathOptInterface.TerminationStatusCode(1)
+                x[x .< 0] .=0
+                s = Float64[problem.fs[i](x[i]) for i=1:nvar]
+                ub = sum(t)
+                lb = sum(s)
+                maxdiff_index = argmax(t-s)
+            else
+                ub = -Inf; lb = -Inf; maxdiff_index = 1
+            end
         end
         new(l,u,w,x,lb,ub,maxdiff_index)
     end
 end
 
-function Node(l,u,problem::SigmoidalProgram; kwargs...)
+function Node(l,u,problem::SigmoidalProgram, init_x; kwargs...)
     nvar = length(l)
     # find w
     w = zeros(nvar)
     for i=1:nvar
         w[i] = find_w(problem.fs[i],problem.dfs[i],l[i],u[i],problem.z[i])
     end
-    Node(l,u,w,problem; kwargs...)
+    Node(l,u,w,problem, init_x; kwargs...)
 end
 
 ## Branching rule
@@ -178,23 +195,24 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
-    left = Node(n.l, left_u, left_w, problem; kwargs...)
+    left = Node(n.l, left_u, left_w, problem, Nothing; kwargs...)
 
     # right child
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
-    right = Node(right_l, n.u, right_w, problem; kwargs...)
+    right = Node(right_l, n.u, right_w, problem, Nothing; kwargs...)
+
     return left, right
 end
 
 ## Branch and bound
 function solve_sp(l, u, problem::SigmoidalProgram; 
-                  TOL = 1e-2, maxiters = 100, verbose = 0)
+                  TOL = 1e-2, maxiters = 100, verbose = 0, init_x=Union{Array{Float64, Nothing}})
     subtol = TOL/length(l)/10
     log = DataFrame(iter=[], lb=[], ub=[])
-    root = Node(l, u, problem; TOL=subtol)
+    root = Node(l, u, problem, Nothing; TOL=subtol)
     if isnan(root.ub)
         error("Problem infeasible")
     end
