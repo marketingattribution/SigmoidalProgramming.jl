@@ -8,6 +8,7 @@ export event_flighting
 function event_flighting(
     baseline::Array{Float64},
     cost::Array{Float64},
+    kpi::Char,
     scale::Float64,
     shape::Float64,
     coef::Float64,
@@ -31,10 +32,14 @@ function event_flighting(
     if u == Nothing
         u = cat(fill(spend, 2 * nweeks), fill(spend / 5, nweeks), dims=(1,))
     end
-    A = hcat(zeros(1, nweeks * 2), ones(1, nweeks))
 
+    # inflection point
     z = cat(fill(scale*((shape - 1) / shape) ^ (1 / shape), nweeks * 2), fill(0, nweeks), dims=(1,))
 
+    # budget constraint matrix
+    A = hcat(zeros(1, nweeks * 2), cost)
+
+    # adstock-grps constraints
     zz = zeros(nweeks * 3)
     C = copy(zz)
     C[1] = 1
@@ -57,15 +62,23 @@ function event_flighting(
         C = vcat(C, transpose(c))
     end
 
+    # functions
     fs1 = Function[x -> weibull(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
-    fs2 = Function[x -> -x * cost[i] for i=1 : nweeks]
-    fs = vcat(fs1, fs2)
     dfs1 = Function[x -> weibull_prime(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
-    dfs2 = Function[x -> -cost[i] for i=1 : nweeks]
+
+    if kpi == 'profit'
+        fs2 = Function[x -> -x * cost[i] for i=1 : nweeks]
+        dfs2 = Function[x -> -cost[i] for i=1 : nweeks]
+    else
+        fs2 = Function[x -> 0 for i=1 : nweeks]
+        dfs2 = Function[x -> 0 for i=1 : nweeks]
+    end
+    fs = vcat(fs1, fs2)
     dfs = vcat(dfs1, dfs2)
 
     output_curve = DataFrame()
 
+    # loop through all the budget levels
     for B = range(
         spend * lower_budget,
         spend * upper_budget,
