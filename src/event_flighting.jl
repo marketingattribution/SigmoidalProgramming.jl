@@ -13,19 +13,25 @@ function event_flighting(
     coef::Float64,
     retention::Float64,
     spend::Float64;
+    nweeks::Int=52,
+    lower_budget::Float64=0.5,
+    upper_budget::Float64=1.5,
+    l=Nothing,
+    u=Nothing,
+    n_segments::Int=20,
     maxiters::Int64,
     verbose::Int=0,
     TOL::Float64=0.01,
-    nweeks::Int=52,
-    nconstr::Int=1,
-    lower_budget::Float64=0.5,
-    upper_budget::Float64=1.5,
-    n_segments::Int=20,
+    solver=Clp
 )
 
-    l = fill(0, 3 * nweeks)
-    u = cat(fill(spend, 2 * nweeks), fill(spend / 5, nweeks), dims=(1,))
-    A = hcat(zeros(nconstr, nweeks * 2), ones(nconstr, nweeks))
+    if l == Nothing
+        l = fill(0, 3 * nweeks)
+    end
+    if u == Nothing
+        u = cat(fill(spend, 2 * nweeks), fill(spend / 5, nweeks), dims=(1,))
+    end
+    A = hcat(zeros(1, nweeks * 2), ones(1, nweeks))
 
     z = cat(fill(scale*((shape - 1) / shape) ^ (1 / shape), nweeks * 2), fill(0, nweeks), dims=(1,))
 
@@ -59,7 +65,6 @@ function event_flighting(
     dfs = vcat(dfs1, dfs2)
 
     output_curve = DataFrame()
-    iterlog = DataFrame()
 
     for B = range(
         spend * lower_budget,
@@ -75,13 +80,13 @@ function event_flighting(
         u = cat(fill(spend, 2 * nweeks), fill(spend / 2, nweeks), dims=(1,))
 
         # find initial point
-        grps = find_weekly_pattern(
+        grps = find_flat_weekly_pattern(
                 retention,
                 scale,
                 shape,
                 B
             )
-        max_kpi, optim_flighting, adstock_grps = find_max_kpi_fighting(
+        max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
             baseline,
             cost,
             grps,
@@ -92,27 +97,27 @@ function event_flighting(
         )
 
         # branch and bound
-        pq, bestnodes, lbs, ubs, log = @time solve_sp(
-            l, u, problem; TOL=TOL, maxiters=maxiters, verbose=verbose, init_x=adstock_grps
+        pq, bestnodes, lbs, ubs, status = @time solve_sp(
+            l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
+            maxiters_noimprovement = 1000
         )
 
         grps = DataFrame(
             period = 1 : nweeks,
             spend=fill(B, nweeks),
             grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
-            lb=fill(lbs[end], nweeks)
+            lb=fill(lbs[end], nweeks),
+            status = fill(status, nweeks)
         )
         output_curve = vcat(output_curve, grps)
-        log[!, :budget] .= B
-        iterlog = vcat(iterlog, log)
     end
 
     println(now())
-    return iterlog, output_curve
+    return output_curve
 end
 
 
-function find_weekly_pattern(retention::Float64, scale::Float64, shape::Float64, budget::Float64, nweeks::Int=52)
+function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Float64, budget::Float64, nweeks::Int=52)
     if round(shape, digits=1)<=1.0
         grps_maintenance_week = budget / (nweeks - 2 + 2 / (1 - retention))
         grps_first_week = grps_maintenance_week / (1 - retention)
@@ -132,7 +137,7 @@ function find_weekly_pattern(retention::Float64, scale::Float64, shape::Float64,
 end
 
 
-function find_max_kpi_fighting(baseline, cost, grps, retention, scale, shape, coefficient, nweeks=52)
+function find_max_kpi_flat_fighting(baseline, cost, grps, retention, scale, shape, coefficient, nweeks=52)
     n_grps_weeks = size(grps)[1]
     max_kpi = -1E10
     optim_flighting = fill(0, n_grps_weeks)

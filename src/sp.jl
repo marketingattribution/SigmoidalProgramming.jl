@@ -1,5 +1,5 @@
 using JuMP
-using Base, GLPK, Clp, DataStructures, MathOptInterface, DataFrames
+using Base, GLPK, Clp, DataStructures, MathOptInterface
 import DataStructures: PriorityQueue, enqueue!, dequeue!
 import Base.Order.Reverse
 
@@ -61,17 +61,15 @@ function calculate_hull(x_val, w, l, fs)
 end
 
 
-## maximize concave hull
-function maximize_fhat(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0));
-                       maxiters = 10, TOL = 1e-6, verbose=0)
+function model_problem(l, u, w, problem::SigmoidalProgram)
+    m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
+    # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
     nvar = length(l)
-    maxiters *= nvar
     fs,dfs = problem.fs, problem.dfs
     
     # Define our variables to be inside a box
     @variable(m, x[i=1:nvar])
-    for i=1:nvar 
+    for i=1:nvar
         set_lower_bound(x[i], l[i])
         set_upper_bound(x[i], u[i])
     end
@@ -95,6 +93,22 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     
     @objective(m, Max, sum(t))
     
+    return m
+end
+
+
+## maximize concave hull
+function maximize_fhat(l, u, w, problem::SigmoidalProgram,
+                       m = model_problem(l, u, w, problem);
+                       maxiters = 10, TOL = 1e-6, verbose=0)
+                       # init_x=zeros(length(l))) # GLPK doesn't allow initialization, but could be useful for other solvers
+
+    nvar = length(l)
+    maxiters *= nvar
+    fs,dfs = problem.fs, problem.dfs
+    x = m[:x]
+    t = m[:t]
+
     # Now solve and add hypograph constraints until the solution stabilizes
     optimize!(m)
     status = termination_status(m)
@@ -146,7 +160,7 @@ struct Node
     lb::Float64
     ub::Float64
     maxdiff_index::Int64
-    function Node(l,u,w,problem,init_x; kwargs...)
+    function Node(l,u,w,problem,init_x=Nothing; kwargs...)
         nvar = length(l)
         # find upper and lower bounds
         if init_x != Nothing
@@ -158,7 +172,7 @@ struct Node
             maxdiff_index = argmax(t-s)
         else
             x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
-            if status==MathOptInterface.TerminationStatusCode(1)
+            if status==MathOptInterface.OPTIMAL
                 x[x .< 0] .=0
                 s = Float64[problem.fs[i](x[i]) for i=1:nvar]
                 ub = sum(t)
@@ -190,29 +204,37 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     splithere = min(n.x[i], problem.z[i])
     if verbose>=2 println("split on coordinate $i at $(n.x[i])") end
 
+    # this does not correctly copy the model; left and right node contaminate each other
+    # if model can only be reused for one node, it's more valuable to reuse it for the right node, since left node only has one constraint
+    # right_m = copy(n.m)
+    # set_optimizer(right_m, optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
+    # left_m = copy(n.m)
+    # set_optimizer(left_m, optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
+    # left_m = n.m
+
     # left child
     left_u = copy(n.u)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
-    left = Node(n.l, left_u, left_w, problem, Nothing; kwargs...)
+    left = Node(n.l, left_u, left_w, problem; kwargs...)
 
     # right child
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
-    right = Node(right_l, n.u, right_w, problem, Nothing; kwargs...)
+    right = Node(right_l, n.u, right_w, problem; kwargs...)
 
     return left, right
 end
 
+
 ## Branch and bound
-function solve_sp(l, u, problem::SigmoidalProgram; 
-                  TOL = 1e-2, maxiters = 100, verbose = 0, init_x=Union{Array{Float64, Nothing}})
+function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
+                  TOL = 1e-2, maxiters = 100, verbose = 0, maxiters_noimprovement = Inf)
     subtol = TOL/length(l)/10
-    log = DataFrame(iter=[], lb=[], ub=[])
-    root = Node(l, u, problem, Nothing; TOL=subtol)
+    root = Node(l, u, problem, init_x; TOL=subtol)
     if isnan(root.ub)
         error("Problem infeasible")
     end
@@ -228,13 +250,17 @@ function solve_sp(l, u, problem::SigmoidalProgram;
         if verbose>=1
             println("iteration: ", i)
         end
-        push!(log, (i, lbs[end], ubs[end]))
 
         if ubs[end] - lbs[end] < TOL * lbs[end]
             println("found solution within tolerance $(ubs[end] - lbs[end]) in $i iterations")
-            break
+            return pq, bestnodes, lbs, ubs, 0
         end
-        node = dequeue!(pq)
+        if length(pq) > 0
+            node = dequeue!(pq)
+        else
+            println("Stop iteration as node queue is empty at iteration $i.")
+            return pq, bestnodes, lbs, ubs, 1
+        end
         push!(ubs,min(node.ub, ubs[end]))
         left, right = split(node, problem; TOL=subtol)
 
@@ -264,6 +290,13 @@ function solve_sp(l, u, problem::SigmoidalProgram;
         else
             if verbose>=2 println("pruned right") end
         end
+
+        # break if no improvement for too long
+        if length(lbs) > maxiters_noimprovement && lbs[end]==lbs[end-maxiters_noimprovement]
+            println("Break after exceeding max iterations with no improvement at iteration $i.")
+            return pq, bestnodes, lbs, ubs, 2
+        end
     end
-    return pq, bestnodes, lbs, ubs, log
+    println("Max iterations reached")
+    return pq, bestnodes, lbs, ubs, 3
 end
