@@ -128,7 +128,7 @@ function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Flo
         z = scale*((shape - 1) / shape) ^ (1 / shape)
         grps_first_week = find_w(f, df, 0, budget, z)
         grps_maintenance_week = grps_first_week * (1 - retention)
-        n_pos_weeks = Int(floor((budget - grps_first_week) / grps_maintenance_week))
+        n_pos_weeks = min(Int(floor((budget - grps_first_week) / grps_maintenance_week)), 50)
         grps_last_week = budget - grps_first_week - n_pos_weeks * grps_maintenance_week
         weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, n_pos_weeks), grps_last_week)
     end
