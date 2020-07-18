@@ -22,8 +22,7 @@ function event_flighting(
     n_segments::Int=20,
     maxiters::Int64,
     verbose::Int=0,
-    TOL::Float64=0.01,
-    solver=Clp
+    TOL::Float64=0.01
 )
 
     if l == Nothing
