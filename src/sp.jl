@@ -62,8 +62,8 @@ end
 
 
 function model_problem(l, u, w, problem::SigmoidalProgram)
-    m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
-    # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
+    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
+    m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
     nvar = length(l)
     fs,dfs = problem.fs, problem.dfs
     
