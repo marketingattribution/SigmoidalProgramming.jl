@@ -8,7 +8,7 @@ export event_flighting
 function event_flighting(
     baseline::Array{Float64},
     cost::Array{Float64},
-    kpi::Char,
+    kpi::String,
     scale::Float64,
     shape::Float64,
     coef::Float64,
@@ -36,7 +36,7 @@ function event_flighting(
     z = cat(fill(scale*((shape - 1) / shape) ^ (1 / shape), nweeks * 2), fill(0, nweeks), dims=(1,))
 
     # budget constraint matrix
-    A = hcat(zeros(1, nweeks * 2), cost)
+    A = hcat(zeros(1, nweeks * 2), transpose(cost))
 
     # adstock-grps constraints
     zz = zeros(nweeks * 3)
@@ -65,7 +65,7 @@ function event_flighting(
     fs1 = Function[x -> weibull(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
     dfs1 = Function[x -> weibull_prime(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
 
-    if kpi == 'profit'
+    if kpi == "profit"
         fs2 = Function[x -> -x * cost[i] for i=1 : nweeks]
         dfs2 = Function[x -> -cost[i] for i=1 : nweeks]
     else
@@ -101,6 +101,7 @@ function event_flighting(
         max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
             baseline,
             cost,
+            kpi,
             grps,
             retention,
             scale,
@@ -149,7 +150,7 @@ function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Flo
 end
 
 
-function find_max_kpi_flat_fighting(baseline, cost, grps, retention, scale, shape, coefficient, nweeks=52)
+function find_max_kpi_flat_fighting(baseline, cost, kpi, grps, retention, scale, shape, coefficient, nweeks=52)
     n_grps_weeks = size(grps)[1]
     max_kpi = -1E10
     optim_flighting = fill(0, n_grps_weeks)
@@ -170,7 +171,12 @@ function find_max_kpi_flat_fighting(baseline, cost, grps, retention, scale, shap
                 adstock[i] = adstock[i-1] * retention
             end
         end
-        kpi = sum(((1 .- exp.(-((adstock / scale) .^ shape))) * coefficient) .* baseline) - sum(test_grps .* cost)
+
+        kpi = sum(((1 .- exp.(-((adstock / scale) .^ shape))) * coefficient) .* baseline)
+        if kpi == "profit"
+            kpi = kpi  - sum(test_grps .* cost)
+        end
+
         if kpi > max_kpi
             max_kpi = kpi
             optim_flighting = test_grps
