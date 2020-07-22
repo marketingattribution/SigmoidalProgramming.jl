@@ -34,12 +34,16 @@ LinearSP(fs::Array{Function,1},dfs::Array{Function,1},
 function addConstraints!(m::Model, x, p::LinearSP)
     # Ax <= b
     nconstr, nvar = size(p.A)
-    for i=1:nconstr
-        @constraint(m, sum(p.A[i,j]*x[j] for j=1:nvar) <= p.b[i])
+    if nconstr >= 1
+        for i=1:nconstr
+            @constraint(m, sum(p.A[i,j]*x[j] for j=1:nvar) <= p.b[i])
+        end
     end
     # Cx == d
     nconstr, nvar = size(p.C)
-    for i=1:nconstr
-        @constraint(m, sum(p.C[i,j]*x[j] for j=1:nvar) == p.d[i])
+    if nconstr >= 1
+        for i=1:nconstr
+            @constraint(m, sum(p.C[i,j]*x[j] for j=1:nvar) == p.d[i])
+        end
     end
 end

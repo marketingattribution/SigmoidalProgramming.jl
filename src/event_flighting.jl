@@ -33,10 +33,15 @@ function event_flighting(
     end
 
     # inflection point
-    z = cat(fill(scale*((shape - 1) / shape) ^ (1 / shape), nweeks * 2), fill(0, nweeks), dims=(1,))
+    if shape > 1
+        z = cat(fill(scale*((shape - 1) / shape) ^ (1 / shape), nweeks * 2), fill(0, nweeks), dims=(1,))
+    else
+        z = fill(0, nweeks * 3)
+    end
 
     # budget constraint matrix
-    A = hcat(zeros(1, nweeks * 2), transpose(cost))
+    # A = hcat(zeros(1, nweeks * 2), transpose(cost))
+    A = []
 
     # adstock-grps constraints
     zz = zeros(nweeks * 3)
@@ -61,17 +66,16 @@ function event_flighting(
         C = vcat(C, transpose(c))
     end
 
+    # budget constraint equality
+    BC = hcat(zeros(1, nweeks * 2), transpose(cost))
+    C = vcat(C, BC)
+
     # functions
     fs1 = Function[x -> weibull(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
     dfs1 = Function[x -> weibull_prime(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
 
-    if kpi == "profit"
-        fs2 = Function[x -> -x * cost[i] for i=1 : nweeks]
-        dfs2 = Function[x -> -cost[i] for i=1 : nweeks]
-    else
-        fs2 = Function[x -> 0 for i=1 : nweeks]
-        dfs2 = Function[x -> 0 for i=1 : nweeks]
-    end
+    fs2 = Function[x -> 0 for i=1 : nweeks]
+    dfs2 = Function[x -> 0 for i=1 : nweeks]
     fs = vcat(fs1, fs2)
     dfs = vcat(dfs1, dfs2)
 
@@ -86,7 +90,8 @@ function event_flighting(
         println("budget: ", B)
         println(now())
 
-        problem = LinearSP(fs, dfs, z, A, [B], C, D)
+        #problem = LinearSP(fs, dfs, z, A, [B], C, D)
+        problem = LinearSP(fs, dfs, z, reshape([], 0, nweeks * 3), [], C, vcat(D, B))
 
         l = fill(0, 3 * nweeks)
         u = cat(fill(spend, 2 * nweeks), fill(spend / 2, nweeks), dims=(1,))
@@ -110,8 +115,13 @@ function event_flighting(
         )
 
         # branch and bound
+        #pq, bestnodes, lbs, ubs, status = @time solve_sp(
+        #    l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
+        #    maxiters_noimprovement = 1000
+        #)
+
         pq, bestnodes, lbs, ubs, status = @time solve_sp(
-            l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
+            l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
             maxiters_noimprovement = 1000
         )
 
