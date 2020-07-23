@@ -34,7 +34,7 @@ function bidding(nvar=500; problemtype=:paper)
     problem = LinearSP(fs, dfs, z, A, B)
 
     # branch and bound
-    pq, bestnodes, lbs, ubs = @time solve_sp(l, u, problem, verbose=false; 
+    pq, bestnodes, lbs, ubs = @time solve_sp(l, u, problem, verbose=false;
                                              TOL=nvar*1e-3, maxiters=1000)
     println("$(length(lbs)) iterations")
     node = bestnodes[end] #dequeue!(pq)
@@ -42,9 +42,13 @@ function bidding(nvar=500; problemtype=:paper)
     println("lb: ",lbs[end])
     println("ub: ",ubs[end])
     println("ratio: ",(ubs[end]-lbs[end])/lbs[end])
+
+    return pq, bestnodes, lbs, ubs
 end
 
-for size=[1,10,20,50,100,500,1000,2000,5000,10000]
-    println("bidding $size")
-    bidding(size)
-end
+# for size=[1,10,20,50,100,500,1000,2000,5000,10000]
+#     println("bidding $size")
+#     bidding(size)
+# end
+
+pq, bestnodes, lbs, ubs = bidding(20)

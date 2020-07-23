@@ -1,5 +1,6 @@
 using JuMP
 using Base, GLPK, Clp, DataStructures, MathOptInterface
+import MathOptInterface: VariablePrimalStart
 import DataStructures: PriorityQueue, enqueue!, dequeue!
 import Base.Order.Reverse
 
@@ -43,6 +44,7 @@ function bisection(f, a, b, tol=1e-9, maxiters=1000)
     return (b-a)/2
 end
 
+
 ## calculate convex hull
 function calculate_hull(x_val, w, l, fs)
     nvar = size(w)[1]
@@ -61,44 +63,40 @@ function calculate_hull(x_val, w, l, fs)
 end
 
 
-function model_problem(l, u, w, problem::SigmoidalProgram)
-    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
-    m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
-    nvar = length(l)
-    fs,dfs = problem.fs, problem.dfs
-    
-    # Define our variables to be inside a box
-    @variable(m, x[i=1:nvar])
-    for i=1:nvar
-        set_lower_bound(x[i], l[i])
-        set_upper_bound(x[i], u[i])
-    end
-    # epigraph variable
-    @variable(m, t[i=1:nvar])
+function model_problem(l, u, w, problem::SigmoidalProgram,
+                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF)))
+   # Clp solver also works with the following syntax
+   # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
 
-    # Require that t be in the hypograph of fhat, approximating as pwl function
-    # At first, we add only the bit of fhat from l to w, and the tangent at u
-    for i=1:nvar
-        if w[i] > l[i]
-            slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
-            offsetatl = fs[i](l[i])
-            @constraint(m, t[i] <= offsetatl + slopeatl*(x[i] - l[i]))
-        #elseif dfs[i](l[i]) != Inf
-        #    @constraint(m, t[i] <= fs[i](l[i]) + dfs[i](l[i])*(x[i] - l[i]))
-        else
-            @constraint(m, t[i] <= fs[i](l[i]) + dfs[i](l[i])*(x[i] - l[i]))
-        end
-        #if dfs[i](u[i]) != Inf
-        #    @constraint(m, t[i] <= fs[i](u[i]) + dfs[i](u[i])*(x[i] - u[i]))
-        #end
-        @constraint(m, t[i] <= fs[i](u[i]) + dfs[i](u[i])*(x[i] - u[i]))
-    end
-    # Add other problem constraints
-    addConstraints!(m, x, problem)
-    
-    @objective(m, Max, sum(t))
-    
-    return m
+   nvar = length(l)
+   fs,dfs = problem.fs, problem.dfs
+
+   # Define our variables to be inside a box
+   @variable(m, x[i=1:nvar])
+   for i=1:nvar
+       set_lower_bound(x[i], l[i])
+       set_upper_bound(x[i], u[i])
+   end
+   # epigraph variable
+   @variable(m, t[i=1:nvar])
+
+   # Require that t be in the hypograph of fhat, approximating as pwl function
+   # At first, we add only the bit of fhat from l to w, and the tangent at u
+   for i=1:nvar
+       if w[i] > l[i]
+           slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
+           offsetatl = fs[i](l[i])
+           @constraint(m, t[i] <= offsetatl + slopeatl*(x[i] - l[i]))
+       else
+           @constraint(m, t[i] <= fs[i](l[i]) + dfs[i](l[i])*(x[i] - l[i]))
+       end
+       @constraint(m, t[i] <= fs[i](u[i]) + dfs[i](u[i])*(x[i] - u[i]))
+   end
+   # Add other problem constraints
+   addConstraints!(m, x, problem)
+
+   @objective(m, Max, sum(t))
+   return m
 end
 
 
@@ -111,8 +109,8 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     nvar = length(l)
     maxiters *= nvar
     fs,dfs = problem.fs, problem.dfs
-    x = m[:x]
-    t = m[:t]
+    #x = m[:x]
+    #t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
     optimize!(m)
@@ -166,7 +164,11 @@ struct Node
     lb::Float64
     ub::Float64
     maxdiff_index::Int64
-    function Node(l,u,w,problem,init_x=Nothing; kwargs...)
+    m # JUMP model
+    function Node(l,u,w,problem,
+                  m = model_problem(l, u, w, problem),
+                  init_x=Nothing;
+                  kwargs...)
         nvar = length(l)
         # find upper and lower bounds
         if init_x != Nothing
@@ -177,7 +179,7 @@ struct Node
             ub = sum(t)
             maxdiff_index = argmax(t-s)
         else
-            x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
+            x, t, status = maximize_fhat(l, u, w, problem, m; kwargs...)
             if status==MathOptInterface.OPTIMAL
                 x[x .< 0] .=0
                 s = Float64[problem.fs[i](x[i]) for i=1:nvar]
@@ -188,7 +190,7 @@ struct Node
                 ub = -Inf; lb = -Inf; maxdiff_index = 1
             end
         end
-        new(l,u,w,x,lb,ub,maxdiff_index)
+        new(l,u,w,x,lb,ub,maxdiff_index,m)
     end
 end
 
@@ -223,15 +225,14 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
-    left = Node(n.l, left_u, left_w, problem; kwargs...)
+    left = Node(n.l, left_u, left_w, problem, ; kwargs...)
 
     # right child
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
-    right = Node(right_l, n.u, right_w, problem; kwargs...)
-
+    right = Node(right_l, n.u, right_w, problem, n.m; kwargs...)
     return left, right
 end
 
@@ -275,17 +276,17 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
             push!(bestnodes,left)
         elseif right.lb > lbs[end]
             push!(lbs,right.lb)
-            push!(bestnodes,right)  
-        else 
-            push!(lbs,lbs[end])  
-        end    
+            push!(bestnodes,right)
+        else
+            push!(lbs,lbs[end])
+        end
         if verbose>=2
             println("(lb, ub) = ($(lbs[end]), $(ubs[end]))")
         end
 
         # prune infeasible or obviously suboptimal nodes
         if !isnan(left.ub) && left.ub >= lbs[end]
-            enqueue!(pq, left, left.ub) 
+            enqueue!(pq, left, left.ub)
             if verbose>=2 println("enqueued left") end
         else
             if verbose>=2 println("pruned left") end
