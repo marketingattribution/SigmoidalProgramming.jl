@@ -105,7 +105,7 @@ function event_flighting(
 
         # branch and bound
         pq, bestnodes, lbs, ubs, status = @time solve_sp(
-            l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
+            l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
             maxiters_noimprovement = 1000
         )
 
