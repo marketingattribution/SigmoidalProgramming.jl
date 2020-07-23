@@ -109,8 +109,8 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     nvar = length(l)
     maxiters *= nvar
     fs,dfs = problem.fs, problem.dfs
-    #x = m[:x]
-    #t = m[:t]
+    x = m[:x]
+    t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
     optimize!(m)
@@ -165,9 +165,8 @@ struct Node
     ub::Float64
     maxdiff_index::Int64
     m # JUMP model
-    function Node(l,u,w,problem,
-                  m = model_problem(l, u, w, problem),
-                  init_x=Nothing;
+    function Node(l,u,w,problem,init_x=Nothing,
+                  m = model_problem(l, u, w, problem);
                   kwargs...)
         nvar = length(l)
         # find upper and lower bounds
@@ -225,14 +224,14 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
-    left = Node(n.l, left_u, left_w, problem, ; kwargs...)
+    left = Node(n.l, left_u, left_w, problem; kwargs...)
 
     # right child
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
-    right = Node(right_l, n.u, right_w, problem, n.m; kwargs...)
+    right = Node(right_l, n.u, right_w, problem, Nothing, n.m; kwargs...)
     return left, right
 end
 
