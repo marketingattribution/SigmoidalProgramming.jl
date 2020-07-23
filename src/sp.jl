@@ -83,9 +83,14 @@ function model_problem(l, u, w, problem::SigmoidalProgram)
             slopeatl = (fs[i](w[i]) - fs[i](l[i]))/(w[i] - l[i])
             offsetatl = fs[i](l[i])
             @constraint(m, t[i] <= offsetatl + slopeatl*(x[i] - l[i]))
+        #elseif dfs[i](l[i]) != Inf
+        #    @constraint(m, t[i] <= fs[i](l[i]) + dfs[i](l[i])*(x[i] - l[i]))
         else
             @constraint(m, t[i] <= fs[i](l[i]) + dfs[i](l[i])*(x[i] - l[i]))
         end
+        #if dfs[i](u[i]) != Inf
+        #    @constraint(m, t[i] <= fs[i](u[i]) + dfs[i](u[i])*(x[i] - u[i]))
+        #end
         @constraint(m, t[i] <= fs[i](u[i]) + dfs[i](u[i])*(x[i] - u[i]))
     end
     # Add other problem constraints
@@ -110,7 +115,6 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
-    write_to_file(m, "infeas.mps")
     optimize!(m)
     status = termination_status(m)
 
@@ -148,7 +152,8 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
         t = calculate_hull(x_val, w, l, fs)
         return x_val, t, status
     else
-        return -Inf, -Inf, status
+        return zeros(1, nvar), zeros(1, nvar), status
+        #return -Inf, -Inf, status
     end
 end
 
@@ -173,8 +178,6 @@ struct Node
             maxdiff_index = argmax(t-s)
         else
             x, t, status = maximize_fhat(l, u, w, problem; kwargs...)
-            println("x:", x)
-            println(status)
             if status==MathOptInterface.OPTIMAL
                 x[x .< 0] .=0
                 s = Float64[problem.fs[i](x[i]) for i=1:nvar]
@@ -205,7 +208,6 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     # split at x for x < z; otherwise split at z
     # (this achieves tighter fits on both children when z < x < w)
     splithere = min(n.x[i], problem.z[i])
-    println("split: ", splithere)
     if verbose>=2 println("split on coordinate $i at $(n.x[i])") end
 
     # this does not correctly copy the model; left and right node contaminate each other
@@ -266,9 +268,7 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
             return pq, bestnodes, lbs, ubs, 1
         end
         push!(ubs,min(node.ub, ubs[end]))
-        println("before split")
         left, right = split(node, problem; TOL=subtol)
-        println("after split")
 
         if left.lb > lbs[end] && left.lb >= right.lb
             push!(lbs,left.lb)

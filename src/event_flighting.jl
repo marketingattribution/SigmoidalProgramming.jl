@@ -8,7 +8,6 @@ export event_flighting
 function event_flighting(
     baseline::Array{Float64},
     cost::Array{Float64},
-    kpi::String,
     scale::Float64,
     shape::Float64,
     coef::Float64,
@@ -29,7 +28,7 @@ function event_flighting(
         l = fill(0, 3 * nweeks)
     end
     if u == Nothing
-        u = cat(fill(spend, 2 * nweeks), fill(spend / 5, nweeks), dims=(1,))
+        u = cat(fill(spend/minimum(cost), 2 * nweeks), fill(spend / minimum(cost) / 2, nweeks), dims=(1,))
     end
 
     # inflection point
@@ -40,8 +39,7 @@ function event_flighting(
     end
 
     # budget constraint matrix
-    # A = hcat(zeros(1, nweeks * 2), transpose(cost))
-    A = []
+    A = hcat(zeros(1, nweeks * 2), transpose(cost))
 
     # adstock-grps constraints
     zz = zeros(nweeks * 3)
@@ -66,10 +64,6 @@ function event_flighting(
         C = vcat(C, transpose(c))
     end
 
-    # budget constraint equality
-    BC = hcat(zeros(1, nweeks * 2), transpose(cost))
-    C = vcat(C, BC)
-
     # functions
     fs1 = Function[x -> weibull(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
     dfs1 = Function[x -> weibull_prime(x, coef, scale, shape) * baseline[i] for i=1 : nweeks * 2]
@@ -85,28 +79,23 @@ function event_flighting(
     for B = range(
         spend * lower_budget,
         spend * upper_budget,
-        step=spend * (upper_budget - lower_budget) / n_segments
+        step = max(spend * (upper_budget - lower_budget) / n_segments, 1E-10)
     )
         println("budget: ", B)
         println(now())
 
-        #problem = LinearSP(fs, dfs, z, A, [B], C, D)
-        problem = LinearSP(fs, dfs, z, reshape([], 0, nweeks * 3), [], C, vcat(D, B))
-
-        l = fill(0, 3 * nweeks)
-        u = cat(fill(spend, 2 * nweeks), fill(spend / 2, nweeks), dims=(1,))
+        problem = LinearSP(fs, dfs, z, A, [B], C, D)
 
         # find initial point
         grps = find_flat_weekly_pattern(
                 retention,
                 scale,
                 shape,
-                B
+                B / (sum(cost)/length(cost))
             )
         max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
             baseline,
             cost,
-            kpi,
             grps,
             retention,
             scale,
@@ -115,13 +104,8 @@ function event_flighting(
         )
 
         # branch and bound
-        #pq, bestnodes, lbs, ubs, status = @time solve_sp(
-        #    l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
-        #    maxiters_noimprovement = 1000
-        #)
-
         pq, bestnodes, lbs, ubs, status = @time solve_sp(
-            l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
+            l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
             maxiters_noimprovement = 1000
         )
 
@@ -140,19 +124,19 @@ function event_flighting(
 end
 
 
-function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Float64, budget::Float64, nweeks::Int=52)
+function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Float64, total_grps::Float64, nweeks::Int=52)
     if round(shape, digits=1)<=1.0
-        grps_maintenance_week = budget / (nweeks - 2 + 2 / (1 - retention))
+        grps_maintenance_week = total_grps / (nweeks - 2 + 2 / (1 - retention))
         grps_first_week = grps_maintenance_week / (1 - retention)
         weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, nweeks - 2), grps_first_week)
     else
         f = x->weibull(x, 1.0, scale, shape)
         df = x->weibull_prime(x, 1.0, scale, shape)
         z = scale*((shape - 1) / shape) ^ (1 / shape)
-        grps_first_week = find_w(f, df, 0, budget, z)
+        grps_first_week = find_w(f, df, 0, total_grps, z)
         grps_maintenance_week = grps_first_week * (1 - retention)
-        n_pos_weeks = min(Int(floor((budget - grps_first_week) / grps_maintenance_week)), 50)
-        grps_last_week = budget - grps_first_week - n_pos_weeks * grps_maintenance_week
+        n_pos_weeks = min(Int(floor((total_grps - grps_first_week) / grps_maintenance_week)), 50)
+        grps_last_week = total_grps - grps_first_week - n_pos_weeks * grps_maintenance_week
         weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, n_pos_weeks), grps_last_week)
     end
 
@@ -160,7 +144,7 @@ function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Flo
 end
 
 
-function find_max_kpi_flat_fighting(baseline, cost, kpi, grps, retention, scale, shape, coefficient, nweeks=52)
+function find_max_kpi_flat_fighting(baseline, cost, grps, retention, scale, shape, coefficient, nweeks=52)
     n_grps_weeks = size(grps)[1]
     max_kpi = -1E10
     optim_flighting = fill(0, n_grps_weeks)
@@ -183,9 +167,6 @@ function find_max_kpi_flat_fighting(baseline, cost, kpi, grps, retention, scale,
         end
 
         kpi = sum(((1 .- exp.(-((adstock / scale) .^ shape))) * coefficient) .* baseline)
-        if kpi == "profit"
-            kpi = kpi  - sum(test_grps .* cost)
-        end
 
         if kpi > max_kpi
             max_kpi = kpi
