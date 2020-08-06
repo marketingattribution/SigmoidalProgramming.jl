@@ -79,7 +79,7 @@ function event_flighting(
     for B = range(
         spend * lower_budget,
         spend * upper_budget,
-        step = max(spend * (upper_budget - lower_budget) / n_segments, 1E-10)
+        step = max(spend * (upper_budget - lower_budget) / (n_segments-1), 1E-10)
     )
         println("budget: ", B)
         println(now())
@@ -109,14 +109,17 @@ function event_flighting(
             maxiters_noimprovement = 1000
         )
 
-        grps = DataFrame(
-            period = 1 : nweeks,
-            spend=fill(B, nweeks),
-            grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
-            lb=fill(lbs[end], nweeks),
-            status = fill(status, nweeks)
-        )
-        output_curve = vcat(output_curve, grps)
+        if length(lbs) > 0
+            grps = DataFrame(
+                period = 1 : nweeks,
+                spend=fill(B, nweeks),
+                grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
+                lb=fill(lbs[end], nweeks),
+                status = fill(status, nweeks),
+                pct = fill(B / spend * 100)
+            )
+            output_curve = vcat(output_curve, grps)
+        end
     end
 
     println(now())

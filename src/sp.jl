@@ -26,7 +26,7 @@ function find_w(f::Function,df::Function,l::Number,u::Number,z::Number)
 end
 
 function bisection(f, a, b, tol=1e-9, maxiters=1000)
-    @assert(f(a)>0)
+    @assert(round(f(a), digits=9)>=0)
     @assert(f(b)<0)
     for i=1:maxiters
         mid = a + (b-a)/2
@@ -113,7 +113,10 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
-    optimize!(m)
+    try
+        optimize!(m)
+    catch y
+    end
     status = termination_status(m)
 
     for i=1:maxiters
@@ -137,7 +140,10 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
                 if verbose>=2 println("solved problem to within $TOL in $i iterations") end
                 break
             else
-                optimize!(m)
+                try
+                    optimize!(m)
+                catch y
+                end
                 status = termination_status(m)
             end
         else
@@ -176,14 +182,20 @@ struct Node
             lb = sum(s)
             t = calculate_hull(x, w, l, problem.fs)
             ub = sum(t)
+            #println(x)
+            #println(s)
+            #println(t)
             maxdiff_index = argmax(t-s)
         else
             x, t, status = maximize_fhat(l, u, w, problem, m; kwargs...)
             if status==MathOptInterface.OPTIMAL
-                x[x .< 0] .=0
+                x = max.(x, l)
                 s = Float64[problem.fs[i](x[i]) for i=1:nvar]
                 ub = sum(t)
                 lb = sum(s)
+                #println(x)
+                #println(s)
+                #println(t)
                 maxdiff_index = argmax(t-s)
             else
                 ub = -Inf; lb = -Inf; maxdiff_index = 1
@@ -193,7 +205,7 @@ struct Node
     end
 end
 
-function Node(l,u,problem::SigmoidalProgram, init_x; kwargs...)
+function Node(l,u,problem::SigmoidalProgram,init_x; kwargs...)
     nvar = length(l)
     # find w
     w = zeros(nvar)
@@ -225,6 +237,9 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
     left = Node(n.l, left_u, left_w, problem; kwargs...)
+    #println("left")
+    #println(left.lb)
+    #println(left.ub)
 
     # right child
     right_l = copy(n.l)
@@ -232,6 +247,10 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
     right = Node(right_l, n.u, right_w, problem, Nothing, n.m; kwargs...)
+    #right = Node(right_l, n.u, right_w, problem, Nothing; kwargs...)
+    #println("right")
+    #println(right.lb)
+    #println(right.ub)
     return left, right
 end
 
@@ -241,16 +260,19 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
                   TOL = 1e-2, maxiters = 100, verbose = 0, maxiters_noimprovement = Inf)
     subtol = TOL/length(l)/10
     root = Node(l, u, problem, init_x; TOL=subtol)
-    if isnan(root.ub)
-        error("Problem infeasible")
-    end
     bestnodes = Node[]
     ubs = Float64[]
     lbs = Float64[]
+    pq = PriorityQueue{Node, Float64}(Reverse)
+    if isnan(root.ub)
+        println("Problem infeasible")
+        return pq, bestnodes, lbs, ubs, 4
+    end
     push!(bestnodes,root)
     push!(ubs,root.ub)
     push!(lbs,root.lb)
-    pq = PriorityQueue{Node, Float64}(Reverse)
+    #println("root")
+    #println("(lb, ub) = ($(lbs[end]), $(ubs[end]))")
     enqueue!(pq, root, root.ub)
     for i=1:maxiters
         if verbose>=1
