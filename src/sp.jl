@@ -64,10 +64,9 @@ end
 
 
 function model_problem(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0)))
+                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF)))
    # Clp solver also works with the following syntax
    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
-   # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
 
    nvar = length(l)
    fs,dfs = problem.fs, problem.dfs
@@ -174,46 +173,40 @@ struct Node
     m # JUMP model
     function Node(l,u,w,problem,
                   m = model_problem(l, u, w, problem);
-                  verbose=0, TOL=1e-6
-                  )
+                  kwargs...)
         nvar = length(l)
         # find upper and lower bounds
-        #if init_x != Nothing
-        #    x = init_x
-        #    s = Float64[problem.fs[i](x[i]) for i=1:size(x)[1]]
-        #    lb = sum(s)
-        #    t = calculate_hull(x, w, l, problem.fs)
-        #    ub = sum(t)
-            #println(x)
-            #println(s)
-            #println(t)
-        #    maxdiff_index = argmax(t-s)
-        #else
-        x, t, status = maximize_fhat(l, u, w, problem, m; verbose=verbose, TOL=TOL)
-        if status==MathOptInterface.OPTIMAL
-            x = max.(x, l)
-            s = Float64[problem.fs[i](x[i]) for i=1:nvar]
-            ub = sum(t)
+        if init_x != Nothing
+            x = init_x
+            s = Float64[problem.fs[i](x[i]) for i=1:size(x)[1]]
             lb = sum(s)
-            #println(x)
-            #println(s)
-            #println(t)
+            t = calculate_hull(x, w, l, problem.fs)
+            ub = sum(t)
             maxdiff_index = argmax(t-s)
         else
-            ub = -Inf; lb = -Inf; maxdiff_index = 1
+            x, t, status = maximize_fhat(l, u, w, problem, m; kwargs...)
+            if status==MathOptInterface.OPTIMAL
+                x = max.(x, l)
+                s = Float64[problem.fs[i](x[i]) for i=1:nvar]
+                ub = sum(t)
+                lb = sum(s)
+                maxdiff_index = argmax(t-s)
+            else
+                ub = -Inf; lb = -Inf; maxdiff_index = 1
+            end
         end
         new(l,u,w,x,lb,ub,maxdiff_index,m)
     end
 end
 
-function Node(l,u,problem::SigmoidalProgram; verbose=0, TOL=1e-6)
+function Node(l,u,problem::SigmoidalProgram, init_x; kwargs...)
     nvar = length(l)
     # find w
     w = zeros(nvar)
     for i=1:nvar
         w[i] = find_w(problem.fs[i],problem.dfs[i],l[i],u[i],problem.z[i])
     end
-    Node(l,u,w,problem; verbose=verbose, TOL=TOL)
+    Node(l,u,w,problem,init_x; kwargs...)
 end
 
 ## Branching rule
@@ -232,29 +225,19 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     # set_optimizer(left_m, optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
     # left_m = n.m
 
-    #println("parent node:", n.x, " ", n.lb, " ", n.ub)
-    #println("parent node model:", n.m)
-    println("i:", i)
-    println("split:", splithere)
-
     # left child
     left_u = copy(n.u)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
     left = Node(n.l, left_u, left_w, problem; kwargs...)
-    #println("left node:", left.x, " ", left.lb, " ", left.ub)
-    #println("left node model:", left.m)
 
     # right child
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
     right_w[i] = find_w(problem.fs[i],problem.dfs[i],right_l[i],n.u[i],problem.z[i])
-    right = Node(right_l, n.u, right_w, problem, n.m; kwargs...)
-    #right = Node(right_l, n.u, right_w, problem; kwargs...)
-    #println("right node:", right.x, " ", right.lb, " ", right.ub)
-    #println("right node model:", right.m)
+    right = Node(right_l, n.u, right_w, problem; kwargs...)
     return left, right
 end
 
@@ -264,7 +247,6 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
                   TOL = 1e-2, maxiters = 100, verbose = 0, maxiters_noimprovement = Inf)
     subtol = TOL/length(l)/10
     root = Node(l, u, problem; TOL=subtol)
-    #println("root model:", root.m)
     bestnodes = Node[]
     ubs = Float64[]
     lbs = Float64[]
@@ -276,20 +258,14 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
     push!(bestnodes,root)
     push!(ubs,root.ub)
     push!(lbs,root.lb)
-    #println("root")
-    #println("(lb, ub) = ($(lbs[end]), $(ubs[end]))")
     enqueue!(pq, root, root.ub)
     for i=1:maxiters
         if verbose>=1
             println("iteration: ", i)
         end
-        println("length of lbs:", length(lbs))
-        println("length of ubs:", length(ubs))
 
         if ubs[end] - lbs[end] < TOL * lbs[end]
             println("found solution within tolerance $(ubs[end] - lbs[end]) in $i iterations")
-            println(bestnodes[end])
-            println(bestnodes[end].m)
             return pq, bestnodes, lbs, ubs, 0
         end
         if length(pq) > 0
@@ -331,8 +307,6 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
         # break if no improvement for too long
         if length(lbs) > maxiters_noimprovement && lbs[end]==lbs[end-maxiters_noimprovement]
             println("Break after exceeding max iterations with no improvement at iteration $i.")
-            println(bestnodes[end])
-            println(bestnodes[end].m)
             return pq, bestnodes, lbs, ubs, 2
         end
     end
