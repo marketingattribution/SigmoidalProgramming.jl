@@ -81,44 +81,46 @@ function event_flighting(
         spend * upper_budget,
         step = max(spend * (upper_budget - lower_budget) / (n_segments-1), 1E-10)
     )
-        println("budget: ", B)
-        println(now())
+        if round(B / spend, digits=1) == 1.1
+            println("budget: ", B)
+            println(now())
 
-        problem = LinearSP(fs, dfs, z, A, [B], C, D)
+            problem = LinearSP(fs, dfs, z, A, [B], C, D)
 
-        # find initial point
-        grps = find_flat_weekly_pattern(
+            # find initial point
+            grps = find_flat_weekly_pattern(
+                    retention,
+                    scale,
+                    shape,
+                    B / (sum(cost)/length(cost))
+                )
+            max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
+                baseline,
+                cost,
+                grps,
                 retention,
                 scale,
                 shape,
-                B / (sum(cost)/length(cost))
+                coef
             )
-        max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
-            baseline,
-            cost,
-            grps,
-            retention,
-            scale,
-            shape,
-            coef
-        )
 
-        # branch and bound
-        pq, bestnodes, lbs, ubs, status = @time solve_sp(
-            l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
-            maxiters_noimprovement = 1000
-        )
-
-        if length(lbs) > 0
-            grps = DataFrame(
-                period = 1 : nweeks,
-                spend=fill(B, nweeks),
-                grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
-                lb=fill(lbs[end], nweeks),
-                status = fill(status, nweeks),
-                pct = fill(B / spend * 100)
+            # branch and bound
+            pq, bestnodes, lbs, ubs, status = @time solve_sp(
+                l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
+                maxiters_noimprovement = 1000
             )
-            output_curve = vcat(output_curve, grps)
+
+            if length(lbs) > 0
+                grps = DataFrame(
+                    period = 1 : nweeks,
+                    spend=fill(B, nweeks),
+                    grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
+                    lb=fill(lbs[end], nweeks),
+                    status = fill(status, nweeks),
+                    pct = fill(B / spend * 100)
+                )
+                output_curve = vcat(output_curve, grps)
+            end
         end
     end
 
