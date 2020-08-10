@@ -28,7 +28,7 @@ function event_flighting(
         l = fill(0, 3 * nweeks)
     end
     if u == Nothing
-        u = cat(fill(spend/minimum(cost), 2 * nweeks), fill(spend / minimum(cost) / 2, nweeks), dims=(1,))
+        u = cat(fill(spend/minimum(cost)*6, 2 * nweeks), fill(spend / minimum(cost), nweeks), dims=(1,))
     end
 
     # inflection point
