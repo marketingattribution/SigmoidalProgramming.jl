@@ -81,46 +81,77 @@ function event_flighting(
         spend * upper_budget,
         step = max(spend * (upper_budget - lower_budget) / (n_segments-1), 1E-10)
     )
-        if round(B / spend, digits=1) == 1.1
-            println("budget: ", B)
-            println(now())
+        println("budget: ", B)
+        println(now())
 
-            problem = LinearSP(fs, dfs, z, A, [B], C, D)
+        problem = LinearSP(fs, dfs, z, A, [B], C, D)
 
-            # find initial point
-            grps = find_flat_weekly_pattern(
-                    retention,
-                    scale,
-                    shape,
-                    B / (sum(cost)/length(cost))
-                )
-            max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
-                baseline,
-                cost,
-                grps,
+        # find initial point
+        grps = find_flat_weekly_pattern(
                 retention,
                 scale,
                 shape,
-                coef
+                B / (sum(cost)/length(cost))
             )
+        max_kpi, optim_flighting, adstock_grps = find_max_kpi_flat_fighting(
+            baseline,
+            cost,
+            grps,
+            retention,
+            scale,
+            shape,
+            coef
+        )
 
-            # branch and bound
-            pq, bestnodes, lbs, ubs, status = @time solve_sp(
+        # branch and bound
+        pq, bestnodes, lbs, ubs, status = @time solve_sp(
+            l, u, problem, adstock_grps; TOL=TOL, maxiters=maxiters, verbose=verbose,
+            maxiters_noimprovement = 1000
+        )
+
+        if length(lbs) > 0
+            println("here")
+            grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3]
+            lb=lbs[end]
+
+            diff_in_out = (adstock_grps[nweeks * 2 + 1 : nweeks * 3] - grps) ./ grps
+            se = diff_in_out .* diff_in_out
+            sse = sum(se[isnan.(se).==false])
+        else
+            println("there")
+            sse = 0.0
+            lb = 0.0
+        end
+        println("sse: ", sse)
+        if sse <= 0.00001 && status == 0
+            pq2, bestnodes2, lbs2, ubs2, status2 = @time solve_sp(
                 l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
                 maxiters_noimprovement = 1000
             )
-
-            if length(lbs) > 0
-                grps = DataFrame(
-                    period = 1 : nweeks,
-                    spend=fill(B, nweeks),
-                    grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
-                    lb=fill(lbs[end], nweeks),
-                    status = fill(status, nweeks),
-                    pct = fill(B / spend * 100)
-                )
-                output_curve = vcat(output_curve, grps)
+            if length(lbs2) > 0
+                lb2=lbs2[end]
+            else
+                lb2 = 0.0
             end
+            if lb2 > lb
+                pq = pq2
+                bestnodes = bestnodes2
+                lbs = lbs2
+                status = status2
+            end
+        end
+
+        if length(lbs) > 0
+            grps = DataFrame(
+                period = 1 : nweeks,
+                spend=fill(B, nweeks),
+                grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
+                lb=fill(lbs[end], nweeks),
+                status = fill(status, nweeks),
+                pct = fill(B / spend * 100, nweeks)
+            )
+
+            output_curve = vcat(output_curve, grps)
         end
     end
 
@@ -130,7 +161,7 @@ end
 
 
 function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Float64, total_grps::Float64, nweeks::Int=52)
-    if round(shape, digits=1)<=1.0
+    if shape<=1.0
         grps_maintenance_week = total_grps / (nweeks - 2 + 2 / (1 - retention))
         grps_first_week = grps_maintenance_week / (1 - retention)
         weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, nweeks - 2), grps_first_week)
@@ -140,9 +171,24 @@ function find_flat_weekly_pattern(retention::Float64, scale::Float64, shape::Flo
         z = scale*((shape - 1) / shape) ^ (1 / shape)
         grps_first_week = find_w(f, df, 0, total_grps, z)
         grps_maintenance_week = grps_first_week * (1 - retention)
-        n_pos_weeks = min(Int(floor((total_grps - grps_first_week) / grps_maintenance_week)), 50)
-        grps_last_week = total_grps - grps_first_week - n_pos_weeks * grps_maintenance_week
-        weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, n_pos_weeks), grps_last_week)
+        n_pos_weeks = min(Int(ceil((total_grps - grps_first_week) / grps_maintenance_week)), nweeks - 1)
+        grps_leftover = total_grps - grps_first_week - n_pos_weeks * grps_maintenance_week
+        if n_pos_weeks > 0
+            if grps_leftover > 0
+                adjustment = total_grps / (total_grps - grps_leftover)
+                grps_first_week = grps_first_week * adjustment
+                grps_maintenance_week = grps_maintenance_week * adjustment
+                weekly_grps = vcat(grps_first_week, fill(grps_maintenance_week, n_pos_weeks))
+            else
+                weekly_grps = vcat(
+                    grps_first_week,
+                    fill(grps_maintenance_week, n_pos_weeks - 1),
+                    grps_maintenance_week + grps_leftover
+                )
+            end
+        else
+            return [grps_first_week]
+        end
     end
 
     return weekly_grps

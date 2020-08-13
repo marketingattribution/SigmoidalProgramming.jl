@@ -171,7 +171,7 @@ struct Node
     ub::Float64
     maxdiff_index::Int64
     m # JUMP model
-    function Node(l,u,w,problem,
+    function Node(l,u,w,problem,init_x=Nothing,
                   m = model_problem(l, u, w, problem);
                   kwargs...)
         nvar = length(l)
@@ -246,7 +246,7 @@ end
 function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
                   TOL = 1e-2, maxiters = 100, verbose = 0, maxiters_noimprovement = Inf)
     subtol = TOL/length(l)/10
-    root = Node(l, u, problem; TOL=subtol)
+    root = Node(l, u, problem, init_x; TOL=subtol)
     bestnodes = Node[]
     ubs = Float64[]
     lbs = Float64[]
