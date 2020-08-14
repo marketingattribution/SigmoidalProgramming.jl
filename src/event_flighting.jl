@@ -1,7 +1,59 @@
 using SigmoidalProgramming
-using Dates, DataFrames
+using Dates, DataFrames, Statistics
 
-export event_flighting
+export generate_event_curves
+
+
+function generate_event_curves(
+    media_parameters,
+    event,
+    event_data,
+    causal,
+    maxiters=10000,
+    verbose=0,
+    n_segments::Int=20,
+    lower_budget::Float64=0.1,
+    upper_budget::Float64=2.0
+)
+    retention = exp.(log(0.5) ./ (media_parameters[!, :half_life]))
+
+    curves = DataFrame()
+    flightings = DataFrame()
+
+    for i=1:size(media_parameters)[1]
+        println("variable: ", media_parameters[i,:variable])
+        product_id = media_parameters[i, :product_id]
+        event_id = event[event[!, :variable].==media_parameters[i, :variable], :id]
+
+        baseline = causal[((causal[!, :product_id].==product_id)
+                .& (causal[!, :variable].=="core")), [:causal]
+        ]
+        baseline = convert(Array, baseline)
+        baseline = vcat(baseline, baseline)
+        cost = convert(Array, event_data[(event_data[!, :event_id].==event_id), [:cost_per_point]])
+        spend = sum(event_data[(event_data[!, :event_id].==event_id), :spend])
+
+        output_curve = event_flighting(
+            baseline,
+            cost,
+            media_parameters[i,:scale],
+            media_parameters[i,:shape],
+            media_parameters[i,:coefficient],
+            retention[i],
+            spend,
+            maxiters=10000,
+            verbose=0,
+            n_segments=n_segments,
+            lower_budget=lower_budget,
+            upper_budget=upper_budget
+        )
+        output_curve[!, :variable] .= media_parameters[i,:variable]
+        flightings = vcat(flightings, output_curve)
+        curve = combine(groupby(output_curve, [:variable, :spend, :pct, :status]), :lb .=> mean)
+        curves = vcat(curves, curve)
+    end
+    return curves, flightings
+end
 
 
 "to find the optimal flighting for a single event"
@@ -110,20 +162,17 @@ function event_flighting(
         )
 
         if length(lbs) > 0
-            println("here")
             grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3]
             lb=lbs[end]
 
             diff_in_out = (adstock_grps[nweeks * 2 + 1 : nweeks * 3] - grps) ./ grps
-            se = diff_in_out .* diff_in_out
-            sse = sum(se[isnan.(se).==false])
+            se = replace!(diff_in_out .* diff_in_out, Inf=>NaN)
+            mse = mean(se[isnan.(se).==false])
         else
-            println("there")
-            sse = 0.0
+            mse = 0.0
             lb = 0.0
         end
-        println("sse: ", sse)
-        if sse <= 0.00001 && status == 0
+        if mse <= 0.00001 && status == 0
             pq2, bestnodes2, lbs2, ubs2, status2 = @time solve_sp(
                 l, u, problem, Nothing; TOL=TOL, maxiters=maxiters, verbose=verbose,
                 maxiters_noimprovement = 1000
