@@ -52,6 +52,9 @@ function generate_event_curves(
         curve = combine(groupby(output_curve, [:variable, :spend, :pct, :status]), :lb .=> mean)
         curves = vcat(curves, curve)
     end
+    names!(curves, [:variable, :spend, :pct, :status, :revenue])
+    names!(flightings, [:period, :spend, :grps, :revenue, :status, :pct, :variable])
+
     return curves, flightings
 end
 
