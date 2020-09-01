@@ -25,6 +25,10 @@ function generate_event_curves(
         product_id = media_parameters[i, :product_id]
         event_id = event[event[!, :variable].==media_parameters[i, :variable], :id]
 
+        periods = causal[((causal[!, :product_id].==product_id)
+                .& (causal[!, :variable].=="core")), [:period]
+        ]
+
         baseline = causal[((causal[!, :product_id].==product_id)
                 .& (causal[!, :variable].=="core")), [:causal]
         ]
@@ -34,6 +38,7 @@ function generate_event_curves(
         spend = sum(event_data[(event_data[!, :event_id].==event_id), :spend])
 
         output_curve = event_flighting(
+            periods,
             baseline,
             cost,
             media_parameters[i,:scale],
@@ -52,8 +57,8 @@ function generate_event_curves(
         curve = combine(groupby(output_curve, [:variable, :spend, :pct, :status]), :lb .=> mean)
         curves = vcat(curves, curve)
     end
-    names!(curves, [:variable, :spend, :pct, :status, :revenue])
-    names!(flightings, [:period, :spend, :grps, :revenue, :status, :pct, :variable])
+    curves = rename(curves, :lb_mean => :revenue)
+    flightings = rename(flightings, :lb => :revenue)
 
     return curves, flightings
 end
@@ -61,6 +66,7 @@ end
 
 "to find the optimal flighting for a single event"
 function event_flighting(
+    periods::DataFrame,
     baseline::Array{Float64},
     cost::Array{Float64},
     scale::Float64,
@@ -195,7 +201,6 @@ function event_flighting(
 
         if length(lbs) > 0
             grps = DataFrame(
-                period = 1 : nweeks,
                 spend=fill(B, nweeks),
                 grps=bestnodes[end].x[nweeks * 2 + 1: nweeks * 3],
                 lb=fill(lbs[end], nweeks),
@@ -203,7 +208,7 @@ function event_flighting(
                 pct = fill(B / spend * 100, nweeks)
             )
 
-            output_curve = vcat(output_curve, grps)
+            output_curve = vcat(output_curve, hcat(periods, grps))
         end
     end
 
