@@ -40,7 +40,10 @@ function bisection(f, a, b, tol=1e-9, maxiters=1000)
             b = mid
         end
     end
-    warn("hit maximum iterations in bisection search")
+    @warn "hit maximum iterations in bisection search"
+    println("a: ", a)
+    println("b: ", b)
+    println("return value: ", (b-a)/2)
     return (b-a)/2
 end
 
@@ -64,9 +67,10 @@ end
 
 
 function model_problem(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF)))
+                       m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0)))
    # Clp solver also works with the following syntax
    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
+   # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
 
    nvar = length(l)
    fs,dfs = problem.fs, problem.dfs
@@ -108,18 +112,22 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
 
     nvar = length(l)
     maxiters *= nvar
+    #println("maximize_fhat maxiters:", maxiters)
     fs,dfs = problem.fs, problem.dfs
     x = m[:x]
     t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
+    #println(now())
     try
         optimize!(m)
     catch y
     end
+    #println(now())
     status = termination_status(m)
 
     for i=1:maxiters
+        #println("maximize_fhat iteration: ", i)
         if status == MathOptInterface.OPTIMAL
             x_val = value.(x)
             t_val = value.(t)
@@ -140,10 +148,13 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
                 if verbose>=2 println("solved problem to within $TOL in $i iterations") end
                 break
             else
+                #println(now())
+                #println("m: ", m)
                 try
                     optimize!(m)
                 catch y
                 end
+                #println(now())
                 status = termination_status(m)
             end
         else
@@ -226,6 +237,7 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     # left_m = n.m
 
     # left child
+    #println("left child")
     left_u = copy(n.u)
     left_u[i] = splithere
     left_w = copy(n.w)
@@ -233,6 +245,7 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     left = Node(n.l, left_u, left_w, problem; kwargs...)
 
     # right child
+    #println("right child")
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
@@ -260,6 +273,7 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
     push!(ubs,root.ub)
     push!(lbs,root.lb)
     enqueue!(pq, root, root.ub)
+    #println("split maxiters: ", maxiters)
     for i=1:maxiters
         if verbose>=1
             println("iteration: ", i)
