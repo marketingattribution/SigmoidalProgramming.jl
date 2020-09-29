@@ -11,9 +11,9 @@ function generate_event_curves(
     causal,
     maxiters=10000,
     verbose=0,
-    n_segments::Int=20,
-    lower_budget::Float64=0.1,
-    upper_budget::Float64=2.0
+    n_segments::Int=2,
+    lower_budget::Float64=3.0,
+    upper_budget::Float64=3.1
 )
     retention = exp.(log(0.5) ./ (media_parameters[!, :half_life]))
 
@@ -75,14 +75,15 @@ function event_flighting(
     retention::Float64,
     spend::Float64;
     nweeks::Int=52,
-    lower_budget::Float64=0.5,
-    upper_budget::Float64=1.5,
+    lower_budget::Float64=0.1,
+    upper_budget::Float64=2.0,
     l=Nothing,
     u=Nothing,
     n_segments::Int=20,
     maxiters::Int64,
     verbose::Int=0,
-    TOL::Float64=0.01
+    TOL::Float64=0.01,
+    post_period_grps_pattern::String="none"
 )
 
     if l == Nothing
@@ -118,11 +119,24 @@ function event_flighting(
         C = vcat(C, transpose(c))
     end
 
-    for i = nweeks + 1 : nweeks * 2
-        c = copy(zz)
-        c[i - 1] = -retention
-        c[i] = 1
-        C = vcat(C, transpose(c))
+    if post_period_grps_pattern == "none"
+        for i = nweeks + 1 : nweeks * 2
+            c = copy(zz)
+            c[i - 1] = -retention
+            c[i] = 1
+            C = vcat(C, transpose(c))
+        end
+    elseif post_period_grps_pattern == "flat"
+        for i = nweeks + 1 : nweeks * 2
+            c = copy(zz)
+            c[i - 1] = -retention
+            c[i] = 1
+            for j = nweeks * 2 + 1 : nweeks * 3
+                c[j] = -1 / nweeks
+            end
+            C = vcat(C, transpose(c))
+        end
+
     end
 
     # functions
@@ -135,6 +149,10 @@ function event_flighting(
     dfs = vcat(dfs1, dfs2)
 
     output_curve = DataFrame()
+
+    println(spend)
+    println(lower_budget)
+    println(upper_budget)
 
     # loop through all the budget levels
     for B = range(
