@@ -41,10 +41,7 @@ function bisection(f, a, b, tol=1e-9, maxiters=1000)
         end
     end
     @warn "hit maximum iterations in bisection search"
-    println("a: ", a)
-    println("b: ", b)
-    println("return value: ", (b-a)/2)
-    return (b-a)/2
+    return (b+a)/2
 end
 
 
@@ -126,7 +123,6 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     status = termination_status(m)
 
     if elapsed_time >= 10
-        println("elasped_time:", elapsed_time)
         status = "time_limit"
         return zeros(1, nvar), zeros(1, nvar), status
     end
@@ -161,7 +157,6 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
                 elapsed_time = time() - start
                 status = termination_status(m)
                 if elapsed_time >= 10
-                    println("elasped_time:", elapsed_time)
                     status = "time_limit"
                     break
                 end
