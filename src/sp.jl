@@ -26,7 +26,7 @@ function find_w(f::Function,df::Function,l::Number,u::Number,z::Number)
 end
 
 function bisection(f, a, b, tol=1e-9, maxiters=1000)
-    @assert(f(a)>0)
+    @assert(round(f(a), digits=9)>=0)
     @assert(f(b)<0)
     for i=1:maxiters
         mid = a + (b-a)/2
@@ -40,8 +40,8 @@ function bisection(f, a, b, tol=1e-9, maxiters=1000)
             b = mid
         end
     end
-    warn("hit maximum iterations in bisection search")
-    return (b-a)/2
+    @warn "hit maximum iterations in bisection search"
+    return (b+a)/2
 end
 
 
@@ -64,9 +64,10 @@ end
 
 
 function model_problem(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF)))
+                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 10000, "msg_lev" => GLPK.MSG_OFF)))
    # Clp solver also works with the following syntax
    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
+   # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.MSG_OFF))
 
    nvar = length(l)
    fs,dfs = problem.fs, problem.dfs
@@ -113,13 +114,21 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
     t = m[:t]
 
     # Now solve and add hypograph constraints until the solution stabilizes
+    start = time()
     try
         optimize!(m)
     catch y
     end
+    elapsed_time = time() - start
     status = termination_status(m)
 
+    if elapsed_time >= 10
+        status = "time_limit"
+        return zeros(1, nvar), zeros(1, nvar), status
+    end
+
     for i=1:maxiters
+        #println("maximize_fhat iteration: ", i)
         if status == MathOptInterface.OPTIMAL
             x_val = value.(x)
             t_val = value.(t)
@@ -140,11 +149,17 @@ function maximize_fhat(l, u, w, problem::SigmoidalProgram,
                 if verbose>=2 println("solved problem to within $TOL in $i iterations") end
                 break
             else
+                start = time()
                 try
                     optimize!(m)
                 catch y
                 end
+                elapsed_time = time() - start
                 status = termination_status(m)
+                if elapsed_time >= 10
+                    status = "time_limit"
+                    break
+                end
             end
         else
             break
@@ -191,6 +206,8 @@ struct Node
                 ub = sum(t)
                 lb = sum(s)
                 maxdiff_index = argmax(t-s)
+            elseif status=="time_limit"
+                ub = -Inf; lb = -Inf; maxdiff_index = -1
             else
                 ub = -Inf; lb = -Inf; maxdiff_index = 1
             end
@@ -206,7 +223,7 @@ function Node(l,u,problem::SigmoidalProgram, init_x; kwargs...)
     for i=1:nvar
         w[i] = find_w(problem.fs[i],problem.dfs[i],l[i],u[i],problem.z[i])
     end
-    Node(l,u,w,problem, init_x; kwargs...)
+    Node(l,u,w,problem,init_x; kwargs...)
 end
 
 ## Branching rule
@@ -226,13 +243,18 @@ function split(n::Node, problem::SigmoidalProgram, verbose=0; kwargs...)
     # left_m = n.m
 
     # left child
+    #println("left child")
     left_u = copy(n.u)
     left_u[i] = splithere
     left_w = copy(n.w)
     left_w[i] = find_w(problem.fs[i],problem.dfs[i],n.l[i],left_u[i],problem.z[i])
     left = Node(n.l, left_u, left_w, problem; kwargs...)
+    if left.maxdiff_index==-1
+        return left, left
+    end
 
     # right child
+    #println("right child")
     right_l = copy(n.l)
     right_l[i] = splithere
     right_w = copy(n.w)
@@ -255,11 +277,15 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
     if isnan(root.ub)
         println("Problem infeasible")
         return pq, bestnodes, lbs, ubs, 4
+    elseif root.maxdiff_index==-1
+        println("Solver time limit reached")
+        return pq, bestnodes, lbs, ubs, 5
     end
     push!(bestnodes,root)
     push!(ubs,root.ub)
     push!(lbs,root.lb)
     enqueue!(pq, root, root.ub)
+    #println("split maxiters: ", maxiters)
     for i=1:maxiters
         if verbose>=1
             println("iteration: ", i)
@@ -277,6 +303,11 @@ function solve_sp(l, u, problem::SigmoidalProgram, init_x=Nothing;
         end
         push!(ubs,min(node.ub, ubs[end]))
         left, right = split(node, problem; TOL=subtol)
+
+        if left.maxdiff_index==-1 || right.maxdiff_index==-1
+            println("Solver time limit reached")
+            return pq, bestnodes, lbs, ubs, 5
+        end
 
         if left.lb > lbs[end] && left.lb >= right.lb
             push!(lbs,left.lb)
