@@ -63,8 +63,13 @@ function calculate_hull(x_val, w, l, fs)
 end
 
 
-function model_problem(l, u, w, problem::SigmoidalProgram,
-                       m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 10000, "msg_lev" => GLPK.GLP_MSG_OFF)))
+function model_problem(
+    l,
+    u,
+    w,
+    problem::SigmoidalProgram,
+    m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
+)
    # Clp solver also works with the following syntax
    # m = Model(optimizer_with_attributes(Clp.Optimizer, "LogLevel" => 0))
    # m = Model(optimizer_with_attributes(GLPK.Optimizer,"tm_lim" => 60000, "msg_lev" => GLPK.GLP_MSG_OFF))
